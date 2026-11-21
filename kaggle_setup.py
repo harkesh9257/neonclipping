@@ -12,9 +12,11 @@ subprocess.run(["pip", "install", "-q", "-r", "requirements.txt"], check=False)
 
 # 2. Setup Ollama
 print("📦 Setting up Ollama with GPU acceleration...")
-subprocess.run(["curl -fsSL https://ollama.com/install.sh | sh"], shell=True)
+subprocess.run(["apt-get", "update", "-y"], check=False)
+subprocess.run(["apt-get", "install", "-y", "zstd"], check=False)
+subprocess.run(["sh", "-c", "curl -fsSL https://ollama.com/install.sh | sh"], check=True)
 subprocess.Popen(["ollama", "serve"])
-time.sleep(4)
+time.sleep(5)
 
 # 3. Pull AI models suited for 16GB+ VRAM
 print("🤖 Pulling Llama 3.2 3B & Vision Models...")
