@@ -16,9 +16,21 @@ import numpy as np, cv2
 FPS = 3; W, H = 160, 90; CUT = 38.0   # mean abs diff above this = hard cut
 
 def _chunk(source, start, length, report):
-    cmd = ['ffmpeg', '-v', 'error', '-ss', f'{start}', '-t', f'{length}', '-i', str(source), '-an',
-           '-vf', f'fps={FPS},scale={W}:{H}', '-pix_fmt', 'gray', '-f', 'rawvideo', 'pipe:1']
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=W * H * 64)
+    # Try GPU NVDEC hardware acceleration if available (cuda), fallback gracefully
+    has_cuda = os.environ.get('CUDA_VISIBLE_DEVICES') != '-1' and os.path.exists('/dev/nvidia0')
+    hw = ['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda'] if has_cuda else []
+    
+    # Scale and gray on hardware/filter
+    vf = f'fps={FPS},scale={W}:{H}'
+    cmd = ['ffmpeg', '-v', 'error', *hw, '-ss', f'{start}', '-t', f'{length}', '-i', str(source), '-an',
+           '-vf', vf, '-pix_fmt', 'gray', '-f', 'rawvideo', 'pipe:1']
+    try:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=W * H * 64)
+    except Exception:
+        # Fallback to pure CPU without hw flags
+        cmd = ['ffmpeg', '-v', 'error', '-ss', f'{start}', '-t', f'{length}', '-i', str(source), '-an',
+               '-vf', vf, '-pix_fmt', 'gray', '-f', 'rawvideo', 'pipe:1']
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=W * H * 64)
     flow, cuts, prev, n = [], [], None, 0
     try:
         while True:
@@ -47,7 +59,8 @@ def _chunk(source, start, length, report):
     return f, c
 
 def _motion(source, duration, report):
-    workers = max(2, min(12, (os.cpu_count() or 4) - 2))
+    # On Kaggle / modern GPU machines, allow up to 8 parallel workers for fast scanning
+    workers = min(8, max(4, os.cpu_count() or 4))
     size = max(60, int(np.ceil(duration / workers / 60) * 60))          # whole-minute chunks
     starts = list(range(0, int(np.ceil(duration)), size))
     done = [0.]

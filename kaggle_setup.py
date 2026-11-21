@@ -7,8 +7,10 @@ import os, subprocess, time, re, sys
 
 print("🚀 Setting up NeonClipping on Kaggle T4 GPUs (32GB VRAM)...")
 
-# 1. Install dependencies
+# 1. Install dependencies + GPU cuDNN for Faster-Whisper
+print("⚡ Installing optimized GPU dependencies...")
 subprocess.run(["pip", "install", "-q", "-r", "requirements.txt"], check=False)
+subprocess.run(["pip", "install", "-q", "nvidia-cublas-cu12", "nvidia-cudnn-cu12"], check=False)
 
 # 2. Setup Ollama
 print("📦 Setting up Ollama with GPU acceleration...")
