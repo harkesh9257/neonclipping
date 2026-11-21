@@ -99,6 +99,10 @@ def attach(app, data, root):
 
     @app.middleware('http')
     async def gate(request: Request, call_next):
+        # On Kaggle / remote tunnel or local network, allow direct access without PIN
+        if os.environ.get('KAGGLE_KERNEL_RUN_TYPE') or os.environ.get('NEONCLIPPING_NO_AUTH') == '1':
+            return await call_next(request)
+
         host = request.client.host if request.client else ''
         if is_local(host):
             return await call_next(request)

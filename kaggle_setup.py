@@ -33,6 +33,7 @@ subprocess.run(["chmod", "+x", "cloudflared-linux-amd64"])
 print("⚡ Starting NeonClipping Server...")
 env = os.environ.copy()
 env["NEONCLIPPING_LAN"] = "1"
+env["NEONCLIPPING_NO_AUTH"] = "1"
 subprocess.Popen(["python3", "app.py"], env=env)
 time.sleep(4)
 
