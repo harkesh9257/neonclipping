@@ -26,8 +26,8 @@ def prepare(url,job,data,probe,publish):
         meta=probe(cached)
         for i,fraction in enumerate((.08,.3,.6,.85)):
             t=meta['duration']*fraction;out=folder/f'{i}.jpg'
-            subprocess.run(['ffmpeg','-y','-v','error','-ss',str(t),'-i',str(cached),'-frames:v','1','-vf','scale=960:-2',str(out)],capture_output=True,check=True,timeout=25)
-            ready(out,t,meta,'cached source frame')
+            subprocess.run(['ffmpeg','-y','-v','error','-ss',str(t),'-i',str(cached),'-frames:v','1','-vf','scale=1920:-2',str(out)],capture_output=True,check=True,timeout=25)
+            ready(out,t,meta,'cached source frame (1080p HD)')
         return
     with yt_dlp.YoutubeDL({'quiet':True,'no_warnings':True,'skip_download':True,'socket_timeout':12,'retries':1,'nocheckcertificate':True}) as y:
         info=y.extract_info(url,download=False)
@@ -48,14 +48,15 @@ def prepare(url,job,data,probe,publish):
             out=folder/f'{i}.jpg';image.crop((x,y,x+cw,y+ch)).save(out,quality=93)
             ready(out,t,meta,'storyboard frame (low-resolution preview)')
         return
-    # Non-storyboard providers: seek a few frames from their low-resolution stream.
-    formats=[f for f in info.get('formats',[]) if f.get('vcodec') not in (None,'none') and f.get('url') and f.get('height',9999)<=480]
-    if not formats:raise RuntimeError('Early frames unavailable for this provider. Download continues.')
-    stream=max(formats,key=lambda f:f.get('height',0))
-    for i,fraction in enumerate((.08,.3,.6,.85)):
-        t=duration*fraction;out=folder/f'{i}.jpg'
-        headers=''.join(f'{k}: {v}\r\n' for k,v in info.get('http_headers',{}).items())
-        cmd=['ffmpeg','-y','-v','error','-rw_timeout','12000000']
-        if headers:cmd+=['-headers',headers]
-        subprocess.run(cmd+['-ss',str(t),'-i',stream['url'],'-frames:v','1','-vf','scale=640:-2',str(out)],capture_output=True,check=True,timeout=25)
-        ready(out,t,meta,'remote source frame')
+    # Non-storyboard or HD direct stream: fetch crisp 1080p/720p frames
+    formats=[f for f in info.get('formats',[]) if f.get('vcodec') not in (None,'none') and f.get('url') and f.get('height',0)<=1080]
+    if formats:
+        stream=max(formats,key=lambda f:f.get('height',0))
+        for i,fraction in enumerate((.08,.3,.6,.85)):
+            t=duration*fraction;out=folder/f'{i}.jpg'
+            headers=''.join(f'{k}: {v}\r\n' for k,v in info.get('http_headers',{}).items())
+            cmd=['ffmpeg','-y','-v','error','-rw_timeout','12000000']
+            if headers:cmd+=['-headers',headers]
+            subprocess.run(cmd+['-ss',str(t),'-i',stream['url'],'-frames:v','1','-vf','scale=1280:-2',str(out)],capture_output=True,check=True,timeout=25)
+            ready(out,t,meta,'remote HD frame')
+        return
