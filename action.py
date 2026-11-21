@@ -14,9 +14,17 @@ W, H, FPS = 160, 90, 6
 
 
 def analyze(path, start, dur):
-    cmd = ['ffmpeg', '-v', 'error', '-ss', f'{max(0, start):.2f}', '-t', f'{dur:.2f}', '-i', str(path), '-an',
+    # Vectorized fast GPU/CPU frame decode
+    has_cuda = os.environ.get('CUDA_VISIBLE_DEVICES') != '-1' and os.path.exists('/dev/nvidia0')
+    hw = ['-hwaccel', 'cuda'] if has_cuda else []
+    cmd = ['ffmpeg', '-v', 'error', *hw, '-ss', f'{max(0, start):.2f}', '-t', f'{dur:.2f}', '-i', str(path), '-an',
            '-vf', f'fps={FPS},scale={W}:{H}', '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1']
-    raw = subprocess.run(cmd, capture_output=True).stdout
+    try:
+        raw = subprocess.run(cmd, capture_output=True, timeout=15).stdout
+    except Exception:
+        cmd = ['ffmpeg', '-v', 'error', '-ss', f'{max(0, start):.2f}', '-t', f'{dur:.2f}', '-i', str(path), '-an',
+               '-vf', f'fps={FPS},scale={W}:{H}', '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1']
+        raw = subprocess.run(cmd, capture_output=True, timeout=15).stdout
     size = W * H * 3
     n = len(raw) // size
     if n < 4:

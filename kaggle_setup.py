@@ -10,7 +10,17 @@ print("🚀 Setting up NeonClipping on Kaggle T4 GPUs (32GB VRAM)...")
 # 1. Install dependencies + GPU cuDNN for Faster-Whisper
 print("⚡ Installing optimized GPU dependencies...")
 subprocess.run(["pip", "install", "-q", "-r", "requirements.txt"], check=False)
-subprocess.run(["pip", "install", "-q", "nvidia-cublas-cu12", "nvidia-cudnn-cu12"], check=False)
+subprocess.run(["pip", "install", "-q", "av<18", "nvidia-cublas-cu12", "nvidia-cudnn-cu12"], check=False)
+
+# Configure CUDA library path for Faster-Whisper
+env = os.environ.copy()
+import site
+site_packages = site.getsitepackages()
+for sp in site_packages:
+    cublas_path = os.path.join(sp, "nvidia", "cublas", "lib")
+    cudnn_path = os.path.join(sp, "nvidia", "cudnn", "lib")
+    if os.path.exists(cublas_path) or os.path.exists(cudnn_path):
+        env["LD_LIBRARY_PATH"] = f"{cublas_path}:{cudnn_path}:" + env.get("LD_LIBRARY_PATH", "")
 
 # 2. Setup Ollama
 print("📦 Setting up Ollama with GPU acceleration...")
