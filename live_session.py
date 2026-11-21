@@ -204,6 +204,10 @@ class LiveSession:
             threading.Thread(target=self._fetch_title, daemon=True).start()
             self._set(status='recording', stage='Recording and watching chat')
             last_clip, seen = -1e9, None
+            # 5-minute rolling window tracking to ensure at least 1 top moment is clipped every 5 mins
+            window_5m_t0 = time.time()
+            window_5m_best = {'count': 0, 'at': None, 'mu': 0.0}
+
             while not self.stop_ev.is_set() and self.proc.poll() is None:
                 time.sleep(1)
                 done_bucket = int(time.time() // BUCKET) - 1
@@ -231,12 +235,30 @@ class LiveSession:
                     continue                                   # not enough chat history yet
                 mu = statistics.mean(hist)
                 at = done_bucket * BUCKET + BUCKET / 2 - self.t0
+
+                # Track best peak inside current 5-minute window
+                if c > window_5m_best['count']:
+                    window_5m_best = {'count': c, 'at': at, 'mu': mu}
+
+                # 1. Natural chat spike triggered
                 if is_spike(c, hist) and at - last_clip > COOLDOWN:
                     last_clip = at
+                    window_5m_t0 = time.time()  # reset 5-minute window
+                    window_5m_best = {'count': 0, 'at': None, 'mu': 0.0}
                     feature = min(1.0, c / (max(mu, 1.0) * 6.0))
                     self._set(spikes=self.state['spikes'] + 1)
                     why = f'Chat spike: {c} msgs/10s vs {mu:.0f} normal'
                     threading.Timer(self.after + 4, lambda a=at, w=why, f=feature: self._cut(a - self.before, self.before + self.after, w, f)).start()
+
+                # 2. 5-minute rolling window expired without natural spike: auto-clip the highest reaction peak in those 5 mins
+                elif time.time() - window_5m_t0 >= 300:
+                    if window_5m_best['at'] and (window_5m_best['at'] - last_clip > COOLDOWN):
+                        last_clip = window_5m_best['at']
+                        feat = min(1.0, window_5m_best['count'] / (max(window_5m_best['mu'], 1.0) * 4.0))
+                        why_5m = f'Top hype in 5-min window ({window_5m_best["count"]} msgs)'
+                        self._cut(window_5m_best['at'] - self.before, self.before + self.after, why_5m, feat)
+                    window_5m_t0 = time.time()
+                    window_5m_best = {'count': 0, 'at': None, 'mu': 0.0}
             if not self.stop_ev.is_set() and self.state['status'] != 'error':
                 self._set(status='ended', stage=self.state['stage'] if self.auto and self.max_seconds and self.now() > self.max_seconds else 'The stream ended.')
         except Exception as e:
