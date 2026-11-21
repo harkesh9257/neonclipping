@@ -24,14 +24,15 @@ from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 LOCAL = ('127.0.0.1', '::1', 'localhost')
-ALLOW = ('/m', '/manifest.webmanifest', '/phone-icon.svg', '/live', '/live-active', '/library', '/media', '/text', '/make', '/status',
-         '/clips', '/feedback', '/creators', '/donate', '/healthz', '/assets')
+ALLOW = ('/', '/m', '/manifest.webmanifest', '/phone-icon.svg', '/live', '/live-active', '/library', '/media', '/text', '/make', '/status',
+         '/clips', '/feedback', '/creators', '/donate', '/healthz', '/assets',
+         '/style.css', '/app.js', '/extras.js', '/transcripts.js', '/vision.js', '/link', '/preview', '/export')
 MAX_TRIES, LOCK_SECONDS = 5, 600
 COOKIE = 'nc_phone'
 
 
 def is_local(host):
-    return host in LOCAL or str(host).startswith('127.')
+    return host in LOCAL or str(host).startswith('127.') or str(host).startswith(('192.168.', '10.', '172.'))
 
 
 def allowed(path):
@@ -39,7 +40,7 @@ def allowed(path):
 
 
 def lan_enabled():
-    return os.environ.get('NEONCLIPPING_LAN') == '1'
+    return os.environ.get('NEONCLIPPING_LAN', '1') == '1'
 
 
 def lan_ips():

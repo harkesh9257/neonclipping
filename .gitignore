@@ -44,4 +44,8 @@ __pycache__/
 !transcripts.js
 !vision.js
 
+!Start-NeonClipping.bat
+!Start-Phone-Mode.bat
+!kaggle_setup.py
+!kaggle_notebook.ipynb
 !mobile.html

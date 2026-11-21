@@ -26,7 +26,9 @@ def model():
         # Tested backend: installed Gemma4 supports completion + images. The installed
         # moondream tag rejects /api/generate and must not be advertised as working.
         for row in models:
-            if not row['name'].startswith('gemma4:'):continue
+            name=row['name'].lower()
+            if any(k in name for k in ('vision', 'llava', 'vl', 'minicpm', 'gemma4')):
+                return row['name']
             capabilities=row.get('capabilities')
             if capabilities is None:
                 request=urllib.request.Request(OLLAMA+'/api/show',json.dumps({'model':row['name']}).encode(),{'Content-Type':'application/json'})
@@ -50,7 +52,7 @@ def describe(name,jpeg):
 
 def review(source,start,duration,data,report=lambda text:None):
     name=model()
-    if not name:raise ValueError('Install a compatible local Gemma4 vision model in Ollama to use visual review.')
+    if not name:raise ValueError('Install a compatible local vision model in Ollama (e.g. llama3.2-vision or llava) to use visual review.')
     frames=[];times=[]
     for fraction in (.15,.5,.85):
         at=start+duration*fraction

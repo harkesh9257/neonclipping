@@ -1,4 +1,7 @@
 """Early selectable video frames, independent of full source download."""
+try:
+    import truststore;truststore.inject_into_ssl()
+except Exception:pass
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import io,json,subprocess,urllib.request
@@ -26,7 +29,7 @@ def prepare(url,job,data,probe,publish):
             subprocess.run(['ffmpeg','-y','-v','error','-ss',str(t),'-i',str(cached),'-frames:v','1','-vf','scale=960:-2',str(out)],capture_output=True,check=True,timeout=25)
             ready(out,t,meta,'cached source frame')
         return
-    with yt_dlp.YoutubeDL({'quiet':True,'no_warnings':True,'skip_download':True,'socket_timeout':12,'retries':1}) as y:
+    with yt_dlp.YoutubeDL({'quiet':True,'no_warnings':True,'skip_download':True,'socket_timeout':12,'retries':1,'nocheckcertificate':True}) as y:
         info=y.extract_info(url,download=False)
     duration=float(info.get('duration') or 0)
     if not duration:raise RuntimeError('Replay duration unavailable. Wait for download or upload an MP4.')

@@ -45,17 +45,26 @@ def attach(app,DATA,state,probe):
                     cached=DATA/(f.name.split('.')[0]+'.mp4')
                     if cached.exists():probe(cached);return cached.stem,cached
             except (OSError,ValueError,subprocess.SubprocessError):pass
+        for sf in DATA.glob('*.state.json'):
+            try:
+                st=json.loads(sf.read_text(encoding='utf-8'))
+                if st.get('source',{}).get('url')==url:
+                    stem=sf.name.replace('.state.json','')
+                    cand=DATA/(stem+'.mp4')
+                    if cand.exists() and cand.stat().st_size>10000000:
+                        probe(cand);return cand.stem,cand
+            except (OSError,ValueError,subprocess.SubprocessError):pass
         directory=DATA/job;directory.mkdir(exist_ok=True)
         target=DATA/(job+'.mp4')
         def progress(event):
             if event.get('status')=='downloading':
                 got=event.get('downloaded_bytes',0);total=event.get('total_bytes') or event.get('total_bytes_estimate') or 0
-                msg=f'Downloading 720p: {got/1048576:.1f} MB'+(f' / {total/1048576:.1f} MB' if total else '')
+                msg=f'Downloading 1080p: {got/1048576:.1f} MB'+(f' / {total/1048576:.1f} MB' if total else '')
                 state[job].update(message=msg,stage=msg,progress=min(.3,got/total*.3) if total else .1)
             elif event.get('status')=='finished':state[job].update(message='Merging source video',stage='Merging source video')
-        options={'noplaylist':True,'format':'best[height<=720][ext=mp4]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]',
+        options={'noplaylist':True,'format':'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best[height<=1080]',
                  'outtmpl':str(directory/'source.%(ext)s'),'merge_output_format':'mp4','socket_timeout':15,'retries':2,'fragment_retries':2,
-                 'extractor_retries':1,'progress_hooks':[progress],'quiet':True,'no_warnings':True}
+                 'extractor_retries':1,'progress_hooks':[progress],'quiet':True,'no_warnings':True,'nocheckcertificate':True}
         with yt_dlp.YoutubeDL(options) as downloader:downloader.download([url])
         src=next((p for p in directory.iterdir() if p.suffix in ('.mp4','.mkv','.webm')),None)
         if src is None:raise RuntimeError('Download produced no playable file. Upload the original MP4 instead.')
@@ -87,14 +96,12 @@ def attach(app,DATA,state,probe):
         if not url:raise HTTPException(400,'Paste a video link.')
         job=uuid.uuid4().hex;save(job,{'status':'running','stage':'Import starting','message':'Getting preview frames; download runs in background','preview_status':'loading','url':url})
         def preview_work():
-            try:prepare(url,job,DATA,probe,lambda fields:save(job,fields))
-            except Exception as error:save(job,{'preview_status':'unavailable','preview_error':'Early frames unavailable; full download continues. '+str(error)[-150:]})
-        threading.Thread(target=preview_work,daemon=True).start()
-        def work():
             try:
-                id,p=download(url,job);save(job,{'status':'done','id':id,**probe(p)})
-            except Exception as error:save(job,{'status':'error','error':'Import failed. Try the original MP4. '+str(error)[-500:]})
-        threading.Thread(target=work,daemon=True).start();return {'job':job}
+                prepare(url,job,DATA,probe,lambda fields:save(job,fields))
+                save(job,{'status':'done','stage':'Preview ready','message':'Preview frames ready. Select your areas and click Make clips.'})
+            except Exception as error:save(job,{'preview_status':'unavailable','preview_error':'Early frames unavailable. '+str(error)[-150:]})
+        threading.Thread(target=preview_work,daemon=True).start()
+        return {'job':job}
 
     @app.get('/preview/{job}/{index}')
     def preview_file(job:str,index:int):

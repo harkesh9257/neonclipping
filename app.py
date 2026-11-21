@@ -1,5 +1,8 @@
+try:
+ import truststore;truststore.inject_into_ssl()
+except Exception:pass
 from pathlib import Path
-import json, subprocess, uuid, threading, shutil
+import json, subprocess, uuid, threading, shutil, hashlib
 import sys
 import time
 import os
@@ -150,7 +153,7 @@ def export(b:dict):
    state[job].update(message='Rendering vertical clip with '+style+' captions' if words else 'Rendering vertical clip')
    base=['ffmpeg','-y','-v','error','-ss',str(start),'-t',str(end-start),'-i',str(src),*(plan.inputs if plan else []),'-filter_complex',fc,'-map','[v]','-map',amap or '0:a?','-t',str(dur),'-c:a','aac','-b:a','160k','-movflags','+faststart']
    if fps:base+=['-r',str(fps),'-fps_mode','cfr']
-   for encoder in [['-c:v','h264_nvenc','-preset','p5','-cq','20'],['-c:v','libx264','-crf','20','-preset','fast']]:
+   for encoder in [['-c:v','h264_nvenc','-preset','p5','-cq','20'],['-c:v','h264_amf','-quality','speed','-rc','cqp','-qp_i','20','-qp_p','20'],['-c:v','libx264','-crf','20','-preset','fast']]:
     r=subprocess.run(base+encoder+['-pix_fmt','yuv420p',str(out)],capture_output=True,text=True,cwd=str(DATA))
     if r.returncode==0:break
    if r.returncode:raise RuntimeError(r.stderr[-900:])
@@ -160,9 +163,9 @@ def export(b:dict):
   except Exception as e:state[job]={'status':'error','error':str(e)}
  threading.Thread(target=work,daemon=True).start();return {'job':job}
 PAD=4.0         # seconds fetched before a section: yt-dlp cuts on a keyframe, export trims exactly
-FAST_OVER=600   # seconds: longer videos go audio-first, short ones are downloaded whole
+FAST_OVER=120   # seconds: videos over 2 mins go audio-first, fetching only the required video sections
 def _yt(opts):
- return yt_dlp.YoutubeDL({'noplaylist':True,'quiet':True,'no_warnings':True,'socket_timeout':20,'retries':3,'fragment_retries':3,'concurrent_fragment_downloads':6,**opts})
+ return yt_dlp.YoutubeDL({'noplaylist':True,'quiet':True,'no_warnings':True,'socket_timeout':20,'retries':3,'fragment_retries':3,'concurrent_fragment_downloads':6,'nocheckcertificate':True,**opts})
 def _dur(p):
  r=subprocess.run(['ffprobe','-v','error','-show_entries','format=duration','-of','csv=p=0',str(p)],capture_output=True,text=True,check=True);return float(r.stdout.strip())
 
@@ -237,7 +240,8 @@ def make(b:dict):
     if info.get('is_live') or info.get('live_status') in ('is_live','is_upcoming'):
      raise RuntimeError('This stream is live right now. Use the Live clipping panel to clip it while it is on, or wait until it ends and use Make clips on the finished video.')
     video_lang=str(info.get('language') or '')
-    fast=float(info.get('duration') or 0)>FAST_OVER and not info.get('is_live') and mode=='fast';title=info.get('title') or ''
+    dl_mode=b.get('download_mode','audio')
+    fast=(dl_mode=='audio') and (float(info.get('duration') or 0)>FAST_OVER) and not info.get('is_live');title=info.get('title') or ''
     try:
      from captions_yt import from_info
      yt_words=from_info(info);save(job,{'transcript_source':'YouTube captions' if yt_words else 'speech model'})
@@ -302,27 +306,60 @@ def make(b:dict):
      c.pop('_act',None)
     top.sort(key=lambda c:-c['rank'])
     return top[:count] if moments else curation.select(top,count,profile)
-   sections=None
+   want_heading=bool(b.get('opening_heading',True))
    if fast:
-    def hook(d):
-     t=d.get('total_bytes') or d.get('total_bytes_estimate')
-     if t and d.get('status')=='downloading':save(job,{'stage':f"Downloading audio {d['downloaded_bytes']/1048576:.0f}/{t/1048576:.0f} MB",'progress':.02+.1*d['downloaded_bytes']/t})
-    with _yt({'format':'ba[ext=m4a]/ba/worst','outtmpl':str(DATA/(job+'.audio.%(ext)s')),'progress_hooks':[hook]}) as y:y.download([url])
-    p=next(f for f in DATA.glob(job+'.audio.*') if f.suffix not in ('.part','.ytdl'));duration=_dur(p);sid=job
+    p=None;vid_id=(info.get('id') if url else None) or (hashlib.sha256(url.encode()).hexdigest()[:12] if url else None)
+    if url and vid_id:
+     cached_target=DATA/f"cache_{vid_id}.audio.m4a"
+     if cached_target.exists() and cached_target.stat().st_size>10000:
+      p=cached_target
+     else:
+      for sf in DATA.glob('*.state.json'):
+       try:
+        st=json.loads(sf.read_text(encoding='utf-8'))
+        if st.get('source',{}).get('url')==url:
+         stem=sf.name.replace('.state.json','')
+         for cand in DATA.glob(f"{stem}.audio.*"):
+          if cand.suffix not in ('.part','.ytdl') and cand.stat().st_size>10000:
+           try:shutil.copy2(cand,cached_target);p=cached_target
+           except Exception:p=cand
+           break
+        if p:break
+       except Exception:pass
+    if not p:
+     def hook(d):
+      t=d.get('total_bytes') or d.get('total_bytes_estimate')
+      if t and d.get('status')=='downloading':save(job,{'stage':f"Downloading audio {d['downloaded_bytes']/1048576:.0f}/{t/1048576:.0f} MB",'progress':.02+.1*d['downloaded_bytes']/t})
+     audio_out=str(DATA/(f"cache_{vid_id}.audio.%(ext)s" if vid_id else f"{job}.audio.%(ext)s"))
+     with _yt({'format':'ba[ext=m4a]/ba/worst','outtmpl':audio_out,'progress_hooks':[hook]}) as y:y.download([url])
+     p=next(f for f in DATA.glob(f"cache_{vid_id}.audio.*" if vid_id else f"{job}.audio.*") if f.suffix not in ('.part','.ytdl'))
+    duration=_dur(p);sid=job
     save(job,{'meta':{'duration':duration},'stage':'Finding moments in audio','progress':.12})
     found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,lambda f,m:save(job,{'stage':m,'progress':.12+.4*f}),language,DATA,min_len,False,yt_words,False,W,False,profile,focus_brief,include_phrases,exclude_phrases)
     found=choose(found,lambda c:lowres_section(url,c))
     if not found:
      save(job,{'status':'done','stage':'No moments matched the transcript filters. Broaden the focus or required phrases.','progress':1,'clips':[],'elapsed_seconds':round(time.monotonic()-began,2)});return
-    save(job,{'engine':engine+' (audio-first)','stage':'Fetching only the chosen sections','progress':.58,'candidates':len(found)})
-    from concurrent.futures import ThreadPoolExecutor
+    save(job,{'engine':engine+' (audio-first)','stage':'Fetching 1080p sections & rendering','progress':.58,'candidates':len(found)})
+    from queue import Queue
     from yt_dlp.utils import download_range_func
-    def section(i,c):
-     name=uuid.uuid4().hex
-     with _yt({'format':'bv*[height<=720][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=720]+ba/b[height<=720]/b','merge_output_format':'mp4','outtmpl':str(DATA/(name+'.%(ext)s')),
-               'download_ranges':download_range_func(None,[(max(0,c['start']-PAD),c['end']+1)])}) as y:y.download([url])
-     return name
-    pool=ThreadPoolExecutor(max_workers=3);sections=[pool.submit(section,i,c) for i,c in enumerate(found)]
+    section_queue=Queue()
+    def download_worker():
+     for idx,cand in enumerate(found):
+      sec_name=uuid.uuid4().hex
+      success=False
+      for attempt in range(3):
+       try:
+        with _yt({'format':'bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]/b','merge_output_format':'mp4','outtmpl':str(DATA/(sec_name+'.%(ext)s')),
+                  'download_ranges':download_range_func(None,[(max(0,cand['start']-PAD),cand['end']+1)])}) as y:y.download([url])
+        p_sec=DATA/(sec_name+'.mp4')
+        if p_sec.exists() and p_sec.stat().st_size>1000:
+         success=True;break
+       except Exception as ex:
+        print(f"Section {idx+1} attempt {attempt+1} error: {ex}")
+        time.sleep(2*(attempt+1))
+      section_queue.put((idx,cand,sec_name if success else None))
+     section_queue.put(None)
+    threading.Thread(target=download_worker,daemon=True).start()
    else:
     if url:
      save(job,{'stage':'Downloading source','progress':.02});sid,p=app.neon['download'](url,job)
@@ -335,18 +372,27 @@ def make(b:dict):
     save(job,{'engine':engine,'stage':'Rendering clips','progress':.6,'candidates':len(found)})
    done=[];cam_use,game_use,cam_checked=cam,game,not b.get('cam_auto')
    uploader=str((info.get('channel') or info.get('uploader') or '')) if url else ''
-   for i,c in enumerate(found):
-    if not moments and c.get('transcript'):
+   for i in range(len(found)):
+    if fast:
+     item=section_queue.get()
+     if item is None:break
+     idx,c,sid2=item
+     if not sid2:
+      print(f"Skipping clip {i+1} due to download error")
+      continue
+     real=section_start(p,DATA/(sid2+'.mp4'),max(0,c['start']-PAD));start=max(0,c['start']-real);end=min(_dur(DATA/(sid2+'.mp4')),start+c['end']-c['start']);words=c.get('words')
+    else:
+     c=found[i];sid2=sid;start=c['start'];end=c['end'];words=c.get('words')
+    save(job,{'stage':f"Rendering clip {i+1}/{len(found)} (background downloading next)" if fast else f"Rendering clip {i+1}/{len(found)}",'progress':.6+.4*(i/len(found))})
+    if not moments and c.get('transcript') and want_heading:
      try:
       import smart
       model=smart._model(profile!='action' or mode=='deep')
       if model:
-       save(job,{'stage':f'Writing opening heading {i+1}/{len(found)}'})
        c['hook']=smart._heading(model,c['transcript'])
      except Exception:pass
-    if sections:
-     sid2=sections[i].result();real=section_start(p,DATA/(sid2+'.mp4'),max(0,c['start']-PAD));start=max(0,c['start']-real);end=min(_dur(DATA/(sid2+'.mp4')),start+c['end']-c['start']);words=c.get('words')
-    else:sid2=sid;start=c['start'];end=c['end'];words=c.get('words')
+    elif not want_heading:
+     c['hook']=''
     if not cam_checked:
      cam_checked=True
      try:
@@ -355,7 +401,7 @@ def make(b:dict):
       if fc.get('found'):cam_use,game_use=fc['cam'],fc['game']
      except Exception as e:save(job,{'facecam':{'found':False,'reason':'detection failed: '+str(e)[:80]}})
     lang=language or ('hinglish' if (video_lang.startswith('hi') or c.get('language')=='hi') else None)
-    body={'id':sid2,'start':start,'end':end,'layout':layout,'top':(top_h if isinstance(top_h,(int,float)) and .2<=top_h<=.5 else .32),'captions':True,'caption_style':style,'language':language,'hook':(' '.join(to_hinglish(w) for w in c.get('hook','').split()) if lang=='hinglish' else c.get('hook','')),
+    body={'id':sid2,'start':start,'end':end,'layout':layout,'top':(top_h if isinstance(top_h,(int,float)) and .2<=top_h<=.5 else .32),'captions':True,'caption_style':style,'language':language,'hook':((' '.join(to_hinglish(w) for w in c.get('hook','').split()) if lang=='hinglish' else c.get('hook','')) if want_heading else ''),
           'aspect':b.get('aspect','vertical'),'resolution':b.get('resolution',1080),'fps':b.get('fps',0),'title':c.get('title',''),'post_caption':c.get('title',''),'batch_id':job,'source_url':url,'cam':cam_use,'game':game_use,'features':c.get('features'),'weights_used':W,'moment_profile':profile,'focus_brief':focus_brief,'focus_match':c.get('focus_match'),'visual_review':c.get('visual_review')}
     for k in styling.KEYS+brands.KEYS+hooks.KEYS:
      if b.get(k) not in (None,''):body[k]=b[k]
@@ -376,7 +422,7 @@ def make(b:dict):
     r=state[ej]
     done.append({'viral':min(99,c['score']),'axes':axes(c.get('features') or {}),'file':ej,'start':c['start'],'end':c['end'],'title':c.get('title') or 'Clip %d'%(i+1),'hook':c.get('hook',''),'score':c['score'],'reason':c.get('reason',''),
                  'error':r.get('error'),'srt':r.get('srt'),'visual_review':c.get('visual_review')})
-    save(job,{'clips':list(done),'stage':f'Rendered {i+1}/{len(found)}','progress':.6+.4*(i+1)/len(found)})
+    save(job,{'clips':list(done),'stage':f'Rendered {len(done)}/{len(found)}','progress':.6+.4*(len(done)/len(found))})
    save(job,{'status':'done','stage':'Clips ready','progress':1,'elapsed_seconds':round(time.monotonic()-began,1)})
   except Exception as e:save(job,{'status':'error','error':str(e)[-600:]})
  threading.Thread(target=work,daemon=True).start();return {'job':job}
@@ -389,7 +435,7 @@ def live_render(sess,start,dur,why,chat_feature):
  o=sess.opts;name=uuid.uuid4().hex;out=DATA/(name+'.mp4');T={};_t=time.time()
  def lap(k):
   nonlocal _t;T[k]=round(time.time()-_t,1);_t=time.time()
- for enc in (['-c:v','h264_nvenc','-preset','p4','-cq','21'],['-c:v','libx264','-preset','veryfast','-crf','21']):
+ for enc in (['-c:v','h264_nvenc','-preset','p4','-cq','21'],['-c:v','h264_amf','-quality','speed','-rc','cqp','-qp_i','21','-qp_p','21'],['-c:v','libx264','-preset','veryfast','-crf','21']):
   r=subprocess.run(['ffmpeg','-y','-v','error','-ss',f'{start:.2f}','-i',str(sess.rec),'-t',f'{dur:.2f}',*enc,'-c:a','aac','-b:a','160k',str(out)],capture_output=True,text=True)
   if r.returncode==0 and out.exists() and out.stat().st_size>10000:break
  else:raise RuntimeError('Could not cut the clip from the recording: '+r.stderr[-150:])
@@ -552,7 +598,14 @@ import creators
 creators.attach(app,DATA,LIVE,lambda target,opts,cid:start_live(target,opts,cid))
 
 if __name__=='__main__':
- lan=os.environ.get('NEONCLIPPING_LAN')=='1'      # phone remote: listen on the home network (PIN required, see phone.py); default is this PC only
- if lan:
-  import phone as _ph;print('Phone access ON. Open one of these on your phone (same Wi-Fi):',', '.join(f"http://{ip}:{os.environ.get('NEONCLIPPING_PORT','8770')}/m" for ip in _ph.lan_ips()) or '(no Wi-Fi address found)')
- uvicorn.run(app,host='0.0.0.0' if lan else '127.0.0.1',port=int(os.environ.get('NEONCLIPPING_PORT','8770')))
+ lan=os.environ.get('NEONCLIPPING_LAN','1')=='1'
+ import phone as _ph
+ ips = _ph.lan_ips()
+ print('========================================================')
+ print('NeonClipping is live!')
+ print('PC access:    http://127.0.0.1:8770')
+ if ips:
+  print('Phone access (same Wi-Fi): ' + ', '.join(f'http://{ip}:8770' for ip in ips))
+  print('Phone remote (compact):    ' + ', '.join(f'http://{ip}:8770/m' for ip in ips))
+ print('========================================================')
+ uvicorn.run(app,host='0.0.0.0',port=int(os.environ.get('NEONCLIPPING_PORT','8770')))

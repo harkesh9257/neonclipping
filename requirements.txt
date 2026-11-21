@@ -8,3 +8,4 @@ faster-whisper>=1.2,<2
 opencv-python-headless
 streamlink
 pytchat
+truststore

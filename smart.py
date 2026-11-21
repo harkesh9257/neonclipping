@@ -35,8 +35,8 @@ def _model(quality=False):
         names=[m['name'] for m in tags]
         if quality:
             for n in names:
-                if n.startswith('gemma4:'):return n
-        for pref in ('llama3.2','qwen','gemma','llama'):
+                if any(pref in n for pref in ('llama3.1:8b', 'qwen2.5:7b', 'llama3.2-vision', 'gemma4:')):return n
+        for pref in ('llama3.2', 'llama3.1', 'qwen2.5', 'qwen', 'gemma', 'llama'):
             for n in names:
                 if pref in n:return n
         return names[0] if names else None
